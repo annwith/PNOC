@@ -83,7 +83,11 @@ def get_classification_transforms(
   else:
     tt += [RandomResize(min_size, max_size)]
     tv += [Resize_For_Segmentation(crop_size)]  # image=(500,480) crop_size=512 --> (534,512)
-  tt += [RandomHorizontalFlip()]
+  if 'flip' in augment:
+    tt += [transforms.RandomHorizontalFlip(p=0.5)]
+    tt += [transforms.RandomVerticalFlip(p=0.5)]
+  if 'rotation' in augment:
+    tt += [transforms.RandomRotation(degrees=[0, 90])]
   if "qnorm" in augment:
     tt += [QuantileChannelIndependentNormalization()]
     tv += [QuantileChannelIndependentNormalization()]
