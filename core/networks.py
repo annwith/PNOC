@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.model_zoo as model_zoo
+from torch.nn.parameter import Parameter
 
 from tools.ai.torch_utils import (gap2d, resize_tensor,
                                   set_trainable_layers)
@@ -167,9 +168,18 @@ def build_backbone(name, dilated, strides, norm_fn, weights='imagenet', channels
       pretrained = weights == "imagenet"
       model_fn = getattr(resnest, name)
       model = model_fn(pretrained=pretrained, dilated=dilated, dilation=dilation, norm_layer=norm_fn)
+
       if pretrained:
         print(f'loading weights from {resnest.resnest_model_urls[name]}')
+
+      if weights and weights != 'imagenet':
+        print(f'loading weights from {weights}')
+        checkpoint = torch.load(weights, map_location="cpu")
+        # model.load_state_dict(checkpoint['state_dict'], strict=False)
+        model.load_state_dict(checkpoint, strict=False)
+
       if channels != 3:
+        print("Modify input layer to receive 4 channels images.")
         patch_conv_in_channels(model, "conv1", channels)
 
       del model.avgpool
@@ -188,10 +198,11 @@ def build_backbone(name, dilated, strides, norm_fn, weights='imagenet', channels
       del model.avgpool
       del model.fc
 
-    if weights and weights != 'imagenet':
-      print(f'loading weights from {weights}')
-      checkpoint = torch.load(weights, map_location="cpu")
-      model.load_state_dict(checkpoint['state_dict'], strict=False)
+    # if weights and weights != 'imagenet':
+    #   print(f'loading weights from {weights}')
+    #   checkpoint = torch.load(weights, map_location="cpu")
+    #   model.load_state_dict(checkpoint['state_dict'], strict=False)
+    #   model.load_state_dict(checkpoint, strict=False)
 
     stages = (
       nn.Sequential(model.conv1, model.bn1, model.relu, model.maxpool),
@@ -373,6 +384,90 @@ class Classifier(Backbone):
       x = gap2d(x, keepdims=True)
       logits = self.classifier(x).view(-1, self.num_classes)
       return logits
+
+
+def gem(x, p=3, eps=1e-6):
+    return F.avg_pool2d(x.clamp(min=eps).pow(p), (x.size(-2), x.size(-1))).pow(1./p)
+
+
+class GeM(nn.Module):
+    def __init__(self, p=3, eps=1e-6):
+        super(GeM,self).__init__()
+        self.p = Parameter(torch.ones(1)*p)
+        self.eps = eps
+
+    def forward(self, x):
+        return gem(x, p=self.p, eps=self.eps)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' + 'p=' + '{:.4f}'.format(self.p.data.tolist()[0]) + ', ' + 'eps=' + str(self.eps) + ')'
+
+
+class RANZERClassifier(Backbone):
+
+  def __init__(
+    self,
+    model_name,
+    num_classes=20,
+    backbone_weights="imagenet",
+    channels=3,
+    mode='fix',
+    dilated=False,
+    strides=None,
+    trainable_stem=True,
+    trainable_stage4=True,
+    trainable_backbone=True,
+    **backbone_kwargs,
+  ):
+    super().__init__(
+      model_name,
+      channels=channels,
+      weights=backbone_weights,
+      mode=mode,
+      dilated=dilated,
+      strides=strides,
+      trainable_stem=trainable_stem,
+      trainable_stage4=trainable_stage4,
+      trainable_backbone=trainable_backbone,
+      backbone_kwargs=backbone_kwargs,
+    )
+
+    self.num_classes = num_classes
+
+    cin = self.backbone.outplanes
+    self.classifier = nn.Conv2d(cin, num_classes, 1, bias=False)
+
+    self.from_scratch_layers.extend([self.classifier])
+    self.initialize([self.classifier])
+
+    self.pool = GeM()
+    self.flatten = nn.Flatten()
+    self.dropout = nn.Dropout(p=0.5)
+
+    self.last_linear_cell = nn.Linear(
+      in_features=cin, 
+      out_features=num_classes)
+    self.last_linear_image = nn.Linear(
+      in_features=cin, 
+      out_features=num_classes)
+
+  def forward(self, x, cnt=16, with_cam=False):
+    if with_cam:
+      raise NotImplementedError(
+        "CAM not currently supported in multi-view mode")
+
+    outs = self.backbone(x)
+    features = outs[-1] if isinstance(outs, tuple) else outs
+
+    pooled = self.flatten(self.pool(features))
+
+    pooled_split = torch.split(pooled, cnt.tolist())
+    pooled_per_img = torch.stack([p.max(0)[0] for p in pooled_split])
+
+    cell_logits = self.last_linear_cell(pooled)
+    image_logits = self.last_linear_image(pooled_per_img)
+
+    return cell_logits, image_logits
 
 
 class CCAM(Backbone):

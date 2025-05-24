@@ -7,7 +7,7 @@ from tools.ai.augment_utils import *
 from tools.ai.randaugment import RandAugmentMC
 
 from .base import *
-from . import base, voc12, coco14, deepglobe, cityscapes, hpa
+from . import base, hpa, hpa2ranzer
 
 
 class Iterator:
@@ -88,6 +88,9 @@ def get_classification_transforms(
     tt += [transforms.RandomVerticalFlip(p=0.5)]
   if 'rotation' in augment:
     tt += [transforms.RandomRotation(degrees=[0, 90])]
+  if 'elastic' in augment:
+    tt += [transforms.RandomApply(
+      [transforms.ElasticTransform(alpha=50.0, sigma=5.0)], p=0.5)] # Update torchvision
   if "qnorm" in augment:
     tt += [QuantileChannelIndependentNormalization()]
     tv += [QuantileChannelIndependentNormalization()]
