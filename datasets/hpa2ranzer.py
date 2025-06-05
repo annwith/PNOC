@@ -11,11 +11,6 @@ from . import base
 
 class RANZERDataset(Dataset):
     NAME: str = "hparanzer"
-    DEFAULT_SPLIT = "train"
-    DOMAINS = {
-        "train": "train",
-        "valid": "valid"
-    }
 
     def __init__(
         self, 
@@ -150,11 +145,6 @@ class RANZERDataset(Dataset):
 
 class ConfAwareRANZERDataset(Dataset):
     NAME: str = "hparanzer"
-    DEFAULT_SPLIT = "train"
-    DOMAINS = {
-        "train": "train",
-        "valid": "valid"
-    }
 
     def __init__(
         self, 
@@ -297,6 +287,50 @@ class ConfAwareRANZERDataset(Dataset):
                 label[idx] = row[self.cols].values.astype(np.float64)
 
             return batch, label, row[self.cols].values.astype(np.float64), cnt
+
+    
+class GetPredictionsDataset(Dataset):
+    def __init__(self, df, tfms=None, cell_path=None, cell_size=256):
+        print('[ i ] GetPredictionsDataset')
+
+        self.df = df.reset_index(drop=True)
+        self.transform = tfms
+        self.tensor_tfms = Compose([
+            ToTensor(),
+            Normalize(mean=[0.485, 0.456, 0.406, 0.406], std=[0.229, 0.224, 0.225, 0.225]),
+        ])
+        self.cell_path = cell_path
+        self.cell_size = cell_size
+        self.cols = ['class{}'.format(i) for i in range(19)]
+
+        print('self.cell_path: {}'.format(self.cell_path))
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, index):
+        row = self.df.loc[index]
+        selected = [i for i in range(row['idx'])]
+        cnt = row['idx']
+        filename = row['ID']
+
+        batch = torch.zeros((cnt, 4, self.cell_size, self.cell_size))
+        mask = np.zeros((cnt))
+        label = np.zeros((cnt, 19))
+        for idx, s in enumerate(selected):
+            path = f'{self.cell_path}/{row["ID"]}_{s+1}.png'
+            img = imread(path)
+            if self.transform is not None:
+                res = self.transform(image=img)
+                img = res['image']
+            if not img.shape[0] == self.cell_size:
+                img = cv2.resize(img, (self.cell_size, self.cell_size))
+            img = self.tensor_tfms(img)
+            batch[idx, :, :, :] = img
+            mask[idx] = 1
+            label[idx] = row[self.cols].values.astype(np.float64)
+
+        return batch, mask, label, row[self.cols].values.astype(np.float64), cnt, filename
         
 
 base.DATASOURCES[ConfAwareRANZERDataset.NAME] = ConfAwareRANZERDataset
