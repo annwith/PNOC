@@ -99,6 +99,61 @@ def get_optimizer(
     raise NotImplementedError(f"Optimizer {algorithm} not implemented.")
 
 
+def get_regular_optimizer(
+    lr, wd, param_groups,
+    algorithm="sgd",
+    alpha_scratch=10.,
+    alpha_bias=2.,
+    betas=None,
+    momentum: float = None,
+    nesterov: bool = None,
+    **kwargs,
+):
+    params = [
+        {
+            'params': param_groups[0],
+            'lr': lr,
+            'weight_decay': wd
+        },
+        {
+            'params': param_groups[1],
+            'lr': alpha_bias * lr,
+            'weight_decay': 0
+        },
+        {
+            'params': param_groups[2],
+            'lr': alpha_scratch * lr,
+            'weight_decay': wd
+        },
+        {
+            'params': param_groups[3],
+            'lr': alpha_scratch * alpha_bias * lr,
+            'weight_decay': 0
+        },
+    ]
+
+    if algorithm == "sgd" or algorithm == "momentum":
+        if momentum is None:
+            momentum = 0.9 if algorithm == "momentum" else 0.0
+        if nesterov is None:
+            nesterov = algorithm == "momentum"
+        return torch.optim.SGD(params, lr=lr, momentum=momentum, nesterov=nesterov, **kwargs)
+
+    elif algorithm == "adamw":
+        return torch.optim.AdamW(params, lr=lr, betas=betas or (0.9, 0.999), **kwargs)
+
+    elif algorithm == "lion":
+        from lion_pytorch import Lion
+        return Lion(params, lr=lr, betas=betas or (0.9, 0.99), **kwargs)
+
+    elif algorithm == "lamb":
+        import torch_optimizer
+        return torch_optimizer.Lamb(params, lr=lr, betas=betas or (0.9, 0.999), **kwargs)
+
+    else:
+        raise NotImplementedError(f"Optimizer {algorithm} not implemented.")
+
+
 def linear_schedule(step, max_step, a_0=0., a_n=1.0, schedule=1.0, constraint=min):
   if schedule == 0:
     return a_n

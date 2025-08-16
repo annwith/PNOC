@@ -331,6 +331,96 @@ class GetPredictionsDataset(Dataset):
             label[idx] = row[self.cols].values.astype(np.float64)
 
         return batch, mask, label, row[self.cols].values.astype(np.float64), cnt, filename
+    
+
+class NegativeClassifierDataset(Dataset):
+    def __init__(
+        self, 
+        df, 
+        tfms=None,
+        cell_path=None,
+        cell_size=256,
+        conf_aware=False,
+        conf_path=None,
+        label_smoothing=0,
+        mode='train'):
+
+        # Store variables
+        self.df = df.reset_index(drop=True)
+        self.transform = tfms
+        self.cell_path = cell_path
+        self.cell_size = cell_size
+        self.conf_aware = conf_aware
+        self.conf_path = conf_path
+        self.label_smoothing = label_smoothing
+        self.mode = mode
+
+        if conf_aware:
+            self.conf_df = pd.read_csv(conf_path)
+            self.conf_df = self.conf_df.reset_index(drop=True)
+            self.conf_df = self.conf_df.set_index('filename')
+            self.conf_cols = ['prob_{}'.format(i) for i in range(19)]
+        else:
+            self.conf_df = None
+        
+        # Normalization and conversion to tensor
+        self.tensor_tfms = Compose([
+            ToTensor(),  # Converts image to PyTorch tensor (C x H x W)
+            Normalize(mean=[0.485, 0.456, 0.406, 0.406], std=[0.229, 0.224, 0.225, 0.225]),  # Normalizes each channel
+        ])
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, index):
+        row = self.df.loc[index]
+
+        # -------- TRAIN MODE --------
+        if self.mode == 'train':
+            if self.conf_aware:
+                raise NotImplementedError("NegativeClassifier does not support conf_aware mode.")
+
+            path = f'{self.cell_path}/{row["filename"]}.png'
+            img = imread(path)
+
+            # Apply optional image augmentations
+            if self.transform is not None:
+                res = self.transform(image=img)
+                img = res['image']
+
+            # Ensure image has the correct size
+            if not img.shape[0] == self.cell_size:
+                img = cv2.resize(img, (self.cell_size, self.cell_size))
+
+            # Apply tensor conversion and normalization
+            img = self.tensor_tfms(img)
+            img_label = torch.tensor(row['is_negative'])
+
+            # Apply label smoothing if configured
+            if self.label_smoothing == 0:
+                return img, img_label
+            else:
+                raise NotImplementedError("Label smoothing is not implemented for NegativeClassifier in train mode.")
+
+        # -------- VALIDATION MODE --------
+        if self.mode == 'valid':
+            path = f'{self.cell_path}/{row["filename"]}.png'
+            img = imread(path)
+
+            # Apply optional image augmentations
+            if self.transform is not None:
+                res = self.transform(image=img)
+                img = res['image']
+
+            # Ensure image has the correct size
+            if not img.shape[0] == self.cell_size:
+                img = cv2.resize(img, (self.cell_size, self.cell_size))
+
+            # Apply tensor conversion and normalization
+            img = self.tensor_tfms(img)
+            img_label = torch.tensor(row['is_negative'])
+
+            return img, img_label
         
 
 base.DATASOURCES[ConfAwareRANZERDataset.NAME] = ConfAwareRANZERDataset

@@ -451,7 +451,7 @@ class RANZERClassifier(Backbone):
       in_features=cin, 
       out_features=num_classes)
 
-  def forward(self, x, cnt=16, with_cam=False):
+  def forward(self, x, cnt=16, with_cam=False, cell_logits_to_image_logits=False):
     if with_cam:
       raise NotImplementedError(
         "CAM not currently supported in multi-view mode")
@@ -461,6 +461,13 @@ class RANZERClassifier(Backbone):
 
     pooled = self.flatten(self.pool(features))
 
+    if cell_logits_to_image_logits:
+      cell_logits = self.last_linear_cell(pooled)
+      cell_logits_split = torch.split(cell_logits, cnt.tolist())
+      image_logits = torch.stack([p.max(0).values for p in cell_logits_split])
+
+      return cell_logits, image_logits
+
     pooled_split = torch.split(pooled, cnt.tolist())
     pooled_per_img = torch.stack([p.max(0)[0] for p in pooled_split])
 
@@ -468,6 +475,61 @@ class RANZERClassifier(Backbone):
     image_logits = self.last_linear_image(pooled_per_img)
 
     return cell_logits, image_logits
+
+
+class NegativeClassifier(Backbone):
+  def __init__(
+    self,
+    model_name,
+    num_classes=1,
+    backbone_weights="imagenet",
+    channels=3,
+    mode='fix',
+    dilated=False,
+    strides=None,
+    trainable_stem=True,
+    trainable_stage4=True,
+    trainable_backbone=True,
+    **backbone_kwargs,
+  ):
+    super().__init__(
+      model_name,
+      channels=channels,
+      weights=backbone_weights,
+      mode=mode,
+      dilated=dilated,
+      strides=strides,
+      trainable_stem=trainable_stem,
+      trainable_stage4=trainable_stage4,
+      trainable_backbone=trainable_backbone,
+      backbone_kwargs=backbone_kwargs,
+    )
+
+    self.num_classes = num_classes
+
+    cin = self.backbone.outplanes
+    self.classifier = nn.Conv2d(cin, self.num_classes, 1, bias=False)
+
+    self.from_scratch_layers.extend([self.classifier])
+    self.initialize([self.classifier])
+
+    self.flatten = nn.Flatten()
+    self.dropout = nn.Dropout(p=0.5)
+
+  def forward(self, x):
+    # print(f"NegativeClassifier x: {x.shape}")
+    features = self.backbone(x)  # Shape: (B, C, H, W)
+    features = features[-1] if isinstance(features, tuple) else features
+    # print(f"NegativeClassifier features: {features.shape}")
+    pooled = F.adaptive_avg_pool2d(features, (1, 1))
+    # print(f"NegativeClassifier pooled: {pooled.shape}")
+    logits = self.classifier(pooled)
+    # print(f"NegativeClassifier logits: {logits.shape}")
+    logits = logits.view(logits.size(0), -1)
+    # print(f"NegativeClassifier logits after view: {logits.shape}")
+    logits = self.dropout(logits)
+    # print(f"NegativeClassifier logits after dropout: {logits.shape}")
+    return logits
 
 
 class CCAM(Backbone):

@@ -5,6 +5,9 @@ import numpy as np
 import wandb
 from datasets import imagenet_stats
 from tools.ai.demo_utils import colormap, denormalize
+import os
+
+os.environ["WANDB_MODE"] = "offline"
 
 
 def setup(name, config, job_type="train", tags=None):
